@@ -1,0 +1,9 @@
+services:
+  - type: worker
+    name: telegram-eurusd-bot
+    env: python
+    buildCommand: ""
+    startCommand: python bot.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.12
