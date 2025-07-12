@@ -1,3 +1,4 @@
-pyTelegramBotAPI
 requests
+pyTelegramBotAPI
 numpy
+websockets
