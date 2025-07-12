@@ -7,7 +7,7 @@ from datetime import datetime
 # Твои ключи
 TWELVEDATA_API_KEY = 'e5626f0337684bb6b292e632d804029e'
 TELEGRAM_BOT_TOKEN = '7566716689:AAGqf-h68P2icgJ0T4IySEhwnEvqtO81Xew'
-TELEGRAM_CHAT_ID = 1671720900  # твой ID для отправки сообщений
+TELEGRAM_CHAT_ID = 1671720900  # твой Telegram ID
 
 # Инициализация бота Telegram
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
@@ -15,7 +15,7 @@ bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(message)s')
 
-def get_candles(symbol='EURUSD.OTC', interval='1min', outputsize=20):
+def get_candles(symbol='EURUSD.OTC', interval='1min', outputsize=10):
     url = f'https://api.twelvedata.com/time_series'
     params = {
         'symbol': symbol,
@@ -32,7 +32,7 @@ def get_candles(symbol='EURUSD.OTC', interval='1min', outputsize=20):
     return data.get('values')
 
 def simple_strategy(candles):
-    # Простая стратегия на основе последнего закрытия
+    # Простая стратегия: если последнее закрытие выше предыдущего — CALL, ниже — PUT
     if not candles or len(candles) < 2:
         return None
     close_current = float(candles[0]['close'])
@@ -65,7 +65,7 @@ def main_loop():
         else:
             logging.info("Сигнал не получен, ждём следующей итерации.")
 
-        time.sleep(60)  # Ожидаем 1 минуту до следующей итерации
+        time.sleep(60)  # Пауза 1 минута
 
 if __name__ == '__main__':
     main_loop()
