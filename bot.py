@@ -15,7 +15,7 @@ bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(message)s')
 
-def get_candles(symbol='EURUSD.OTC', interval='1min', outputsize=5):
+def get_candles(symbol='EURUSD.OTC', interval='1min', outputsize=20):
     url = f'https://api.twelvedata.com/time_series'
     params = {
         'symbol': symbol,
@@ -28,6 +28,8 @@ def get_candles(symbol='EURUSD.OTC', interval='1min', outputsize=5):
     data = response.json()
     if 'status' in data and data['status'] == 'error':
         logging.error(f"Ошибка получения данных: {data}")
+        if data['code'] == 429:
+            return 'limit_exceeded'
         return None
     return data.get('values')
 
@@ -54,9 +56,13 @@ def main_loop():
     while True:
         logging.info("Запрос данных для EURUSD.OTC")
         candles = get_candles()
+        if candles == 'limit_exceeded':
+            logging.error("Превышен дневной лимит API. Пауза на 1 час.")
+            time.sleep(3600)  # Пауза 1 час
+            continue
         if candles is None:
             logging.info("Недостаточно данных для сигнала")
-            time.sleep(300)  # пауза 5 минут при ошибке
+            time.sleep(60)
             continue
 
         signal = simple_strategy(candles)
@@ -65,7 +71,7 @@ def main_loop():
         else:
             logging.info("Сигнал не получен, ждём следующей итерации.")
 
-        time.sleep(300)  # пауза 5 минут между запросами
+        time.sleep(60)  # Ожидаем 1 минуту до следующей итерации
 
 if __name__ == '__main__':
     main_loop()
