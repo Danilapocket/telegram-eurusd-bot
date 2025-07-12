@@ -1,6 +1,6 @@
 import requests
 import time
-import telegram
+import telebot
 import numpy as np
 from datetime import datetime
 
