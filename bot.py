@@ -18,7 +18,7 @@ def get_symbol_for_today():
     # weekday(): Пн=0, ..., Вс=6
     today = datetime.now(timezone.utc).weekday()
     if today >= 5:  # Сб, Вс — выходные
-        return "EURUSD.OTC"
+        return "EUR/USD-OTC"
     else:
         return "EUR/USD"
 
@@ -58,26 +58,37 @@ def calculate_rsi(prices, period=14):
     return round(rsi, 2)
 
 
+def calculate_ema(prices, period=10):
+    prices = np.array(prices)
+    ema = [np.mean(prices[:period])]
+    k = 2 / (period + 1)
+    for price in prices[period:]:
+        ema.append((price - ema[-1]) * k + ema[-1])
+    return ema[-1]
+
+
 def get_signal(prices):
-    if len(prices) < 15:
+    if len(prices) < 20:
         return None
 
     sma = sum(prices[-10:]) / 10
+    ema = calculate_ema(prices[-20:], 10)
     rsi = calculate_rsi(prices, 14)
     price_now = prices[-1]
 
-    print(f"[{datetime.now(timezone.utc)}] Цена: {price_now}, SMA: {sma}, RSI: {rsi}")
+    print(f"[{datetime.now(timezone.utc)}] Цена: {price_now}, SMA: {sma}, EMA: {ema:.5f}, RSI: {rsi}")
 
-    if price_now > sma and rsi < 30:
-        return "CALL", sma, rsi, price_now
-    elif price_now < sma and rsi > 70:
-        return "PUT", sma, rsi, price_now
+    # Пример условия для сигнала с EMA + SMA + RSI
+    if price_now > sma and price_now > ema and rsi < 30:
+        return "CALL", sma, ema, rsi, price_now
+    elif price_now < sma and price_now < ema and rsi > 70:
+        return "PUT", sma, ema, rsi, price_now
     else:
         print(f"[{datetime.now(timezone.utc)}] Сигнал отсутствует")
         return None
 
 
-def send_signal(direction, sma, rsi, price_now):
+def send_signal(direction, sma, ema, rsi, price_now):
     time_now = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
     emoji = "🟢" if direction == "CALL" else "🔴"
 
@@ -88,6 +99,7 @@ def send_signal(direction, sma, rsi, price_now):
 
 Цена: {price_now:.5f}
 SMA(10): {sma:.5f}
+EMA(10): {ema:.5f}
 RSI(14): {rsi}
 
 ⚠️ Это не инвестиционная рекомендация.
@@ -102,8 +114,8 @@ while True:
         prices = get_price_data()
         result = get_signal(prices)
         if result:
-            direction, sma, rsi, price_now = result
-            send_signal(direction, sma, rsi, price_now)
+            direction, sma, ema, rsi, price_now = result
+            send_signal(direction, sma, ema, rsi, price_now)
         time.sleep(60)  # Ждём 1 минуту
     except Exception as e:
         print("Ошибка:", e)
