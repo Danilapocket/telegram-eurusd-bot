@@ -15,10 +15,9 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 
 def get_symbol_for_today():
-    # weekday(): Пн=0, ..., Вс=6
     today = datetime.now(timezone.utc).weekday()
-    if today >= 5:  # Сб, Вс — выходные
-        return "EUR/USD-OTC"
+    if today >= 5:  # Сб, Вс
+        return "EURUSD.OTC"
     else:
         return "EUR/USD"
 
@@ -31,7 +30,7 @@ def get_price_data():
     data = response.json()
 
     if "values" not in data:
-        print("Ошибка получения данных:", data)
+        print(f"[{datetime.now(timezone.utc)}] Ошибка получения данных:", data)
         return []
 
     closes = [float(x["close"]) for x in reversed(data["values"])]
@@ -58,37 +57,30 @@ def calculate_rsi(prices, period=14):
     return round(rsi, 2)
 
 
-def calculate_ema(prices, period=10):
-    prices = np.array(prices)
-    ema = [np.mean(prices[:period])]
-    k = 2 / (period + 1)
-    for price in prices[period:]:
-        ema.append((price - ema[-1]) * k + ema[-1])
-    return ema[-1]
-
-
 def get_signal(prices):
-    if len(prices) < 20:
+    if len(prices) < 15:
+        print(f"[{datetime.now(timezone.utc)}] Недостаточно данных для сигнала")
         return None
 
     sma = sum(prices[-10:]) / 10
-    ema = calculate_ema(prices[-20:], 10)
     rsi = calculate_rsi(prices, 14)
     price_now = prices[-1]
 
-    print(f"[{datetime.now(timezone.utc)}] Цена: {price_now}, SMA: {sma}, EMA: {ema:.5f}, RSI: {rsi}")
+    print(f"[{datetime.now(timezone.utc)}] Цена: {price_now:.5f}, SMA: {sma:.5f}, RSI: {rsi}")
 
-    # Пример условия для сигнала с EMA + SMA + RSI
-    if price_now > sma and price_now > ema and rsi < 30:
-        return "CALL", sma, ema, rsi, price_now
-    elif price_now < sma and price_now < ema and rsi > 70:
-        return "PUT", sma, ema, rsi, price_now
+    # Смягченные условия:
+    if price_now > sma and rsi <= 50:  
+        print(f"[{datetime.now(timezone.utc)}] Сигнал: CALL")
+        return "CALL", sma, rsi, price_now
+    elif price_now < sma and rsi >= 50:
+        print(f"[{datetime.now(timezone.utc)}] Сигнал: PUT")
+        return "PUT", sma, rsi, price_now
     else:
         print(f"[{datetime.now(timezone.utc)}] Сигнал отсутствует")
         return None
 
 
-def send_signal(direction, sma, ema, rsi, price_now):
+def send_signal(direction, sma, rsi, price_now):
     time_now = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
     emoji = "🟢" if direction == "CALL" else "🔴"
 
@@ -99,7 +91,6 @@ def send_signal(direction, sma, ema, rsi, price_now):
 
 Цена: {price_now:.5f}
 SMA(10): {sma:.5f}
-EMA(10): {ema:.5f}
 RSI(14): {rsi}
 
 ⚠️ Это не инвестиционная рекомендация.
@@ -107,16 +98,17 @@ RSI(14): {rsi}
     bot.send_message(USER_ID, message)
 
 
-# --- Основной цикл ---
 print("Бот запущен...")
+
 while True:
     try:
         prices = get_price_data()
-        result = get_signal(prices)
-        if result:
-            direction, sma, ema, rsi, price_now = result
-            send_signal(direction, sma, ema, rsi, price_now)
-        time.sleep(60)  # Ждём 1 минуту
+        print(f"[{datetime.now(timezone.utc)}] Данных для анализа: {len(prices)}")
+        signal = get_signal(prices)
+        if signal:
+            direction, sma, rsi, price_now = signal
+            send_signal(direction, sma, rsi, price_now)
+        time.sleep(60)
     except Exception as e:
-        print("Ошибка:", e)
+        print(f"[{datetime.now(timezone.utc)}] Ошибка: {e}")
         time.sleep(60)
