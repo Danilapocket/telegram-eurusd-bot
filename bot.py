@@ -4,28 +4,24 @@ import telebot
 import numpy as np
 from datetime import datetime, timezone
 
-# --- Настройки ---
-API_KEY = "e5626f0337684bb6b292e632d804029e"  # Twelve Data API
-TELEGRAM_TOKEN = "7566716689:AAGqf-h68P2icgJ0T4IySEhwnEvqtO81Xew"  # Твой токен Telegram
-USER_ID = 1671720900  # Твой Telegram ID
+API_KEY = "e5626f0337684bb6b292e632d804029e"
+TELEGRAM_TOKEN = "7566716689:AAGqf-h68P2icgJ0T4IySEhwnEvqtO81Xew"
+USER_ID = 1671720900
 INTERVAL = "1min"
 LIMIT = 100
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
-
 def get_symbol_for_today():
     today = datetime.now(timezone.utc).weekday()
-    # В выходные используем OTC, в будни — стандартный символ
     if today >= 5:
         return "EURUSD.OTC"
     else:
         return "EUR/USD"
 
-
 def get_price_data():
     symbol = get_symbol_for_today()
-    print(f"[{datetime.now(timezone.utc)}] Запрос данных для символа {symbol}")
+    print(f"[{datetime.now(timezone.utc)}] Запрос данных для {symbol}")
     url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={INTERVAL}&apikey={API_KEY}&outputsize={LIMIT}"
     response = requests.get(url)
     data = response.json()
@@ -35,9 +31,8 @@ def get_price_data():
         return []
 
     closes = [float(x["close"]) for x in reversed(data["values"])]
-    print(f"[{datetime.now(timezone.utc)}] Получено {len(closes)} закрытий")
+    print(f"[{datetime.now(timezone.utc)}] Получено {len(closes)} закрытий. Пример: {closes[-5:]}")
     return closes
-
 
 def calculate_rsi(prices, period=14):
     deltas = np.diff(prices)
@@ -57,25 +52,27 @@ def calculate_rsi(prices, period=14):
 
     return round(rsi, 2)
 
-
 def get_signal(prices):
     if len(prices) < 15:
+        print("Недостаточно данных для сигнала")
         return None
 
     sma = sum(prices[-10:]) / 10
     rsi = calculate_rsi(prices, 14)
     price_now = prices[-1]
 
-    print(f"[{datetime.now(timezone.utc)}] Цена: {price_now}, SMA: {sma}, RSI: {rsi}")
+    print(f"[{datetime.now(timezone.utc)}] Цена: {price_now:.5f}, SMA: {sma:.5f}, RSI: {rsi}")
 
-    if price_now > sma and rsi < 30:
+    # Мягкие условия, чтобы чаще приходил сигнал:
+    if price_now > sma and rsi < 50:
+        print("Генерируем сигнал CALL")
         return "CALL", sma, rsi, price_now
-    elif price_now < sma and rsi > 70:
+    elif price_now < sma and rsi > 50:
+        print("Генерируем сигнал PUT")
         return "PUT", sma, rsi, price_now
     else:
-        print(f"[{datetime.now(timezone.utc)}] Сигнал отсутствует")
+        print("Сигнал не сгенерирован")
         return None
-
 
 def send_signal(direction, sma, rsi, price_now):
     time_now = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
@@ -92,11 +89,12 @@ RSI(14): {rsi}
 
 ⚠️ Это не инвестиционная рекомендация.
 """
-    bot.send_message(USER_ID, message)
-    print(f"[{datetime.now(timezone.utc)}] Отправлено сообщение в Telegram")
+    try:
+        bot.send_message(USER_ID, message)
+        print(f"[{datetime.now(timezone.utc)}] Отправлено сообщение в Telegram")
+    except Exception as e:
+        print("Ошибка при отправке Telegram-сообщения:", e)
 
-
-# --- Основной цикл ---
 print("Бот запущен...")
 while True:
     try:
@@ -105,7 +103,9 @@ while True:
         if result:
             direction, sma, rsi, price_now = result
             send_signal(direction, sma, rsi, price_now)
-        time.sleep(60)  # Ждём 1 минуту
+        else:
+            print("Сигнал не получен, ждём следующей итерации.")
+        time.sleep(60)
     except Exception as e:
-        print("Ошибка:", e)
+        print("Ошибка в основном цикле:", e)
         time.sleep(60)
