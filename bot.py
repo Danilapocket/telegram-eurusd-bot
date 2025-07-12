@@ -13,17 +13,19 @@ LIMIT = 100
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
+
 def get_symbol_for_today():
-    # weekday(): Пн=0, Вт=1, ..., Вс=6
-    today = datetime.utcnow().weekday()
-    if today >= 5:  # Суббота и Воскресенье
-        return "EURUSD.OTC"  # Если не работает, попробуй "EURUSD.OCT"
+    # weekday(): Пн=0, ..., Вс=6
+    today = datetime.now(timezone.utc).weekday()
+    if today >= 5:  # Сб, Вс — выходные
+        return "EURUSD.OTC"
     else:
         return "EUR/USD"
 
+
 def get_price_data():
     symbol = get_symbol_for_today()
-    print(f"[{datetime.now(timezone.utc)}] Используем символ: {symbol}")
+    print(f"[{datetime.now(timezone.utc)}] Запрос данных для символа {symbol} с Twelve Data")
     url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={INTERVAL}&apikey={API_KEY}&outputsize={LIMIT}"
     response = requests.get(url)
     data = response.json()
@@ -35,6 +37,7 @@ def get_price_data():
     closes = [float(x["close"]) for x in reversed(data["values"])]
     print(f"[{datetime.now(timezone.utc)}] Получено {len(closes)} закрытий")
     return closes
+
 
 def calculate_rsi(prices, period=14):
     deltas = np.diff(prices)
@@ -54,6 +57,7 @@ def calculate_rsi(prices, period=14):
 
     return round(rsi, 2)
 
+
 def get_signal(prices):
     if len(prices) < 15:
         return None
@@ -72,12 +76,13 @@ def get_signal(prices):
         print(f"[{datetime.now(timezone.utc)}] Сигнал отсутствует")
         return None
 
+
 def send_signal(direction, sma, rsi, price_now):
     time_now = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
     emoji = "🟢" if direction == "CALL" else "🔴"
 
     message = f"""
-📊 Сигнал по EUR/USD (1m)
+📊 Сигнал по {get_symbol_for_today()} (1m)
 🕒 Время: {time_now}
 {emoji} {direction}
 
@@ -89,20 +94,17 @@ RSI(14): {rsi}
 """
     bot.send_message(USER_ID, message)
 
-print("Бот запущен...")
 
+# --- Основной цикл ---
+print("Бот запущен...")
 while True:
     try:
         prices = get_price_data()
-        if not prices:
-            print("Нет данных, пропускаем цикл")
-            time.sleep(60)
-            continue
         result = get_signal(prices)
         if result:
             direction, sma, rsi, price_now = result
             send_signal(direction, sma, rsi, price_now)
-        time.sleep(60)
+        time.sleep(60)  # Ждём 1 минуту
     except Exception as e:
         print("Ошибка:", e)
         time.sleep(60)
