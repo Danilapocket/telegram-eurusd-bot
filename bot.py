@@ -4,14 +4,17 @@ import numpy as np
 import telebot
 from datetime import datetime, timezone
 import websockets
+import threading
 
-# --- Настройки ---
+# === Настройки ===
 TELEGRAM_TOKEN = "7566716689:AAGqf-h68P2icgJ0T4IySEhwnEvqtO81Xew"
 USER_ID = 1671720900
-SYMBOL = "FX:EURUSD"  # TradingView формат для OTC EUR/USD
-INTERVAL = "1"  # 1 минута
+
+SYMBOL = "FX:EURUSD"  # Символ TradingView для EUR/USD OTC
+INTERVAL = "1"  # 1-минутный таймфрейм
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
+prices = []  # Хранение последних цен закрытия (close)
 
 
 def calculate_sma(prices, period=10):
@@ -39,57 +42,19 @@ def calculate_rsi(prices, period=14):
     return round(rsi, 2)
 
 
-def calculate_bollinger_bands(prices, period=20, std_dev_factor=2):
-    if len(prices) < period:
-        return None, None
-    sma = np.mean(prices[-period:])
-    std_dev = np.std(prices[-period:])
-    upper_band = sma + std_dev_factor * std_dev
-    lower_band = sma - std_dev_factor * std_dev
-    return upper_band, lower_band
-
-
-def calculate_macd(prices, slow=26, fast=12, signal=9):
-    if len(prices) < slow + signal:
-        return None, None, None
-    ema_fast = ema(prices, fast)
-    ema_slow = ema(prices, slow)
-    macd_line = ema_fast - ema_slow
-    signal_line = ema(macd_line[-signal:], signal)
-    histogram = macd_line[-1] - signal_line[-1]
-    return macd_line[-1], signal_line[-1], histogram
-
-
-def ema(prices, period):
-    ema_values = []
-    k = 2 / (period + 1)
-    for i, price in enumerate(prices):
-        if i == 0:
-            ema_values.append(price)
-        else:
-            ema_values.append(price * k + ema_values[-1] * (1 - k))
-    return np.array(ema_values)
-
-
 def generate_signal(prices):
-    if len(prices) < 30:
+    if len(prices) < 15:
         return None
 
     price_now = prices[-1]
     sma = calculate_sma(prices, 10)
     rsi = calculate_rsi(prices, 14)
-    upper_band, lower_band = calculate_bollinger_bands(prices, 20)
-    macd_line, signal_line, histogram = calculate_macd(prices)
 
-    print(f"[{datetime.now(timezone.utc)}] price={price_now:.5f}, SMA={sma:.5f}, RSI={rsi}, BB_up={upper_band:.5f}, BB_low={lower_band:.5f}, MACD={macd_line:.5f}, Signal={signal_line:.5f}, Hist={histogram:.5f}")
+    print(f"[{datetime.now(timezone.utc)}] Цена: {price_now:.5f}, SMA: {sma:.5f}, RSI: {rsi}")
 
-    # Простая логика сигналов:
-    # CALL: Цена выше SMA, RSI < 30, MACD гистограмма растет, цена ниже нижней BB (перепроданность)
-    # PUT: Цена ниже SMA, RSI > 70, MACD гистограмма падает, цена выше верхней BB (перекупленность)
-
-    if price_now > sma and rsi is not None and rsi < 30 and histogram > 0 and price_now < lower_band:
+    if price_now > sma and rsi is not None and rsi < 30:
         return "CALL", sma, rsi, price_now
-    elif price_now < sma and rsi is not None and rsi > 70 and histogram < 0 and price_now > upper_band:
+    elif price_now < sma and rsi is not None and rsi > 70:
         return "PUT", sma, rsi, price_now
     else:
         return None
@@ -113,49 +78,60 @@ RSI(14): {rsi}
 
 
 async def tradingview_ws():
+    global prices
     url = "wss://data.tradingview.com/socket.io/websocket"
-    prices = []
 
     async with websockets.connect(url) as ws:
-        # Подписка на нужный тикер и интервал
-        # Формат сообщений и подписки можно найти в open source TradingView WS clients
+        # Инициализация сессии
+        await ws.send('~m~8~m~{"session_id":"","timestamp":0}')
+        await asyncio.sleep(1)
 
-        # Пример подписки, нужно адаптировать под TradingView protocol
-        # Для простоты - сюда нужно добавить реальный подписочный JSON
+        # Создаем сессию для запроса котировок
+        await ws.send(f'~m~{len(json.dumps({"m":"quote_create_session","p":["qs_1", SYMBOL]}))}~m~{json.dumps({"m":"quote_create_session","p":["qs_1", SYMBOL]})}')
+        await asyncio.sleep(1)
 
-        # TODO: Подписка на EURUSD с 1m интервалом
-        # Если потребуется, могу помочь с точной подпиской.
+        # Подписываемся на данные 1м таймфрейма
+        await ws.send(f'~m~{len(json.dumps({"m":"resolve_symbol","p":["qs_1", SYMBOL]}))}~m~{json.dumps({"m":"resolve_symbol","p":["qs_1", SYMBOL]})}')
+        await asyncio.sleep(1)
 
-        # Для примера: будем эмулировать получение цен
+        await ws.send(f'~m~{len(json.dumps({"m":"create_series","p":["qs_1", "s1", "1", "1"]}))}~m~{json.dumps({"m":"create_series","p":["qs_1", "s1", INTERVAL, "1"]})}')
+        await asyncio.sleep(1)
+
         while True:
-            msg = await ws.recv()
-            data = json.loads(msg)
+            try:
+                msg = await ws.recv()
+                if msg.startswith("~m~"):
+                    msg_json = msg[msg.find("{"):]
+                    data = json.loads(msg_json)
 
-            # Обработка данных: нужно вытащить цену закрытия свечи из data
-            # Добавим цену в prices, удерживая последние 100 значений
-            # prices.append(close_price)
-            # if len(prices) > 100:
-            #     prices.pop(0)
+                    # Обрабатываем новые бары
+                    if data.get("m") == "timescale_update":
+                        bars = data.get("p", [])[1].get("bars", [])
+                        for bar in bars:
+                            close_price = bar["close"]
+                            if len(prices) == 0 or prices[-1] != close_price:
+                                prices.append(close_price)
+                                if len(prices) > 100:
+                                    prices.pop(0)
+                                signal = generate_signal(prices)
+                                if signal:
+                                    direction, sma, rsi, price_now = signal
+                                    send_signal(direction, sma, rsi, price_now)
 
-            # Потом генерируем сигнал
-            signal = generate_signal(prices)
-            if signal:
-                direction, sma, rsi, price_now = signal
-                send_signal(direction, sma, rsi, price_now)
+            except Exception as e:
+                print("Ошибка WebSocket:", e)
+                await asyncio.sleep(5)
 
-            await asyncio.sleep(60)
+
+def start_telegram_polling():
+    bot.infinity_polling()
 
 
 if __name__ == "__main__":
     print("Бот запущен...")
 
-    # Запускаем Telegram polling параллельно
-    import threading
+    # Запускаем Telegram polling в отдельном потоке
+    threading.Thread(target=start_telegram_polling, daemon=True).start()
 
-    def telegram_polling():
-        bot.infinity_polling()
-
-    threading.Thread(target=telegram_polling, daemon=True).start()
-
-    # Запускаем asyncio event loop для WS
+    # Запускаем WebSocket клиент
     asyncio.run(tradingview_ws())
