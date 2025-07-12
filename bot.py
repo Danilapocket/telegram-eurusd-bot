@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 API_KEY = "e5626f0337684bb6b292e632d804029e"  # Twelve Data API
 TELEGRAM_TOKEN = "7566716689:AAGqf-h68P2icgJ0T4IySEhwnEvqtO81Xew"
 USER_ID = 1671720900
-SYMBOL = "EUR/USD"
+SYMBOL = "EURUSD_OTC"  # OTC версия EUR/USD
 INTERVAL = "1min"
 LIMIT = 100
 
@@ -73,7 +73,7 @@ def send_signal(direction, sma, rsi, price_now):
     emoji = "🟢" if direction == "CALL" else "🔴"
 
     message = f"""
-📊 Сигнал по EUR/USD (1m)
+📊 Сигнал по EUR/USD OTC (1m)
 🕒 Время: {time_now}
 {emoji} {direction}
 
