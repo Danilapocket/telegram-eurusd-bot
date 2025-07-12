@@ -5,97 +5,100 @@ import numpy as np
 from datetime import datetime, timezone
 
 # --- Настройки ---
-API_KEY = "e5626f0337684bb6b292e632d804029e"  # Twelve Data API
+API_KEY = "e5626f0337684bb6b292e632d804029e"
 TELEGRAM_TOKEN = "7566716689:AAGqf-h68P2icgJ0T4IySEhwnEvqtO81Xew"
 USER_ID = 1671720900
-SYMBOL = "EURUSD_OTC"  # OTC версия EUR/USD
+SYMBOL = "EUR/USD"
 INTERVAL = "1min"
 LIMIT = 100
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
+def log(msg: str):
+    t = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    print(f"[{t}] {msg}")
 
 def get_price_data():
-    print(f"[{datetime.now(timezone.utc)}] Запрос данных с Twelve Data")
-    url = f"https://api.twelvedata.com/time_series?symbol={SYMBOL}&interval={INTERVAL}&apikey={API_KEY}&outputsize={LIMIT}"
-    response = requests.get(url)
-    data = response.json()
+    log("Запрос данных с Twelve Data")
+    try:
+        resp = requests.get(
+            f"https://api.twelvedata.com/time_series", 
+            params={"symbol": SYMBOL, "interval": INTERVAL, "apikey": API_KEY, "outputsize": LIMIT},
+            timeout=10
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        log(f"Ошибка запроса данных: {e}")
+        return []
 
     if "values" not in data:
-        print("Ошибка получения данных:", data)
+        log(f"Ошибка в ответе: {data}")
         return []
 
     closes = [float(x["close"]) for x in reversed(data["values"])]
-    print(f"[{datetime.now(timezone.utc)}] Получено {len(closes)} закрытий")
+    log(f"Получено {len(closes)} баров")
     return closes
-
 
 def calculate_rsi(prices, period=14):
     deltas = np.diff(prices)
-    seed = deltas[:period]
-    up = seed[seed >= 0].sum() / period
-    down = -seed[seed < 0].sum() / period
-    rs = up / down if down != 0 else 0
-    rsi = 100. - (100. / (1. + rs))
-
+    up = deltas[:period][deltas[:period] >= 0].sum() / period
+    down = -deltas[:period][deltas[:period] < 0].sum() / period
+    rs = up/down if down else 0
+    rsi = 100 - (100/(1+rs))
+    up_avg, down_avg = up, down
     for delta in deltas[period:]:
-        upval = max(delta, 0)
-        downval = -min(delta, 0)
-        up = (up * (period - 1) + upval) / period
-        down = (down * (period - 1) + downval) / period
-        rs = up / down if down != 0 else 0
-        rsi = 100. - (100. / (1. + rs))
-
-    return round(rsi, 2)
-
+        up_avg = (up_avg*(period-1) + max(delta,0))/period
+        down_avg = (down_avg*(period-1) + -min(delta,0))/period
+        rs = up_avg/down_avg if down_avg else 0
+        rsi = round(100 - (100/(1+rs)), 2)
+    return rsi
 
 def get_signal(prices):
-    if len(prices) < 15:
+    if len(prices) < LIMIT:
+        log("Недостаточно баров для сигнала")
         return None
-
-    sma = sum(prices[-10:]) / 10
+    sma = sum(prices[-10:])/10
     rsi = calculate_rsi(prices, 14)
-    price_now = prices[-1]
+    price = prices[-1]
+    log(f"Цена: {price:.5f}, SMA: {sma:.5f}, RSI: {rsi}")
+    if price > sma and rsi < 30:
+        return "CALL", sma, rsi, price
+    if price < sma and rsi > 70:
+        return "PUT", sma, rsi, price
+    log("Сигнал отсутствует")
+    return None
 
-    print(f"[{datetime.now(timezone.utc)}] Цена: {price_now}, SMA: {sma}, RSI: {rsi}")
-
-    if price_now > sma and rsi < 30:
-        return "CALL", sma, rsi, price_now
-    elif price_now < sma and rsi > 70:
-        return "PUT", sma, rsi, price_now
-    else:
-        print(f"[{datetime.now(timezone.utc)}] Сигнал отсутствует")
-        return None
-
-
-def send_signal(direction, sma, rsi, price_now):
-    time_now = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
-    emoji = "🟢" if direction == "CALL" else "🔴"
-
-    message = f"""
-📊 Сигнал по EUR/USD OTC (1m)
-🕒 Время: {time_now}
-{emoji} {direction}
-
-Цена: {price_now:.5f}
+def send_signal(direction, sma, rsi, price):
+    t = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
+    emoji = "🟢" if direction=="CALL" else "🔴"
+    msg = f"""
+📊 Сигнал по {SYMBOL} ({INTERVAL})
+🕒 {t} — {emoji} {direction}
+Цена: {price:.5f}
 SMA(10): {sma:.5f}
 RSI(14): {rsi}
 
 ⚠️ Это не инвестиционная рекомендация.
 """
-    bot.send_message(USER_ID, message)
-
-
-# --- Основной цикл ---
-print("Бот запущен...")
-while True:
     try:
-        prices = get_price_data()
-        result = get_signal(prices)
-        if result:
-            direction, sma, rsi, price_now = result
-            send_signal(direction, sma, rsi, price_now)
-        time.sleep(60)  # Ждём 1 минуту
+        bot.send_message(USER_ID, msg)
+        log("✅ Сигнал отправлен")
     except Exception as e:
-        print("Ошибка:", e)
-        time.sleep(60)
+        log(f"Ошибка отправки: {e}")
+
+def main():
+    log("Бот запущен")
+    while True:
+        try:
+            prices = get_price_data()
+            sig = get_signal(prices)
+            if sig:
+                send_signal(*sig)
+            time.sleep(60)
+        except Exception as e:
+            log(f"⚠️ Ошибка RunLoop: {e}")
+            time.sleep(60)
+
+if __name__ == "__main__":
+    main()
