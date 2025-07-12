@@ -6,13 +6,13 @@ from datetime import datetime
 
 # --- Настройки ---
 API_KEY = "e5626f0337684bb6b292e632d804029e"  # Twelve Data API
-TELEGRAM_TOKEN = "7566716689:AAGqf-h68P2icgJ0T4IySEhwnEvqtO81Xew" 
+TELEGRAM_TOKEN = "7566716689:AAGqf-h68P2icgJ0T4IySEhwnEvqtO81Xew"
 USER_ID = 1671720900
 SYMBOL = "EUR/USD"
 INTERVAL = "1min"
 LIMIT = 100
 
-bot = telegram.Bot(token=TELEGRAM_TOKEN)
+bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 
 def get_price_data():
