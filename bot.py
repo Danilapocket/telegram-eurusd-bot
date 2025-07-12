@@ -1,29 +1,45 @@
-import asyncio
-import json
-import numpy as np
+import requests
+import time
 import telebot
+import numpy as np
 from datetime import datetime, timezone
-import websockets
-import threading
 
-# === Настройки ===
+# --- Настройки ---
+API_KEY = "e5626f0337684bb6b292e632d804029e"  # Twelve Data API
 TELEGRAM_TOKEN = "7566716689:AAGqf-h68P2icgJ0T4IySEhwnEvqtO81Xew"
 USER_ID = 1671720900
-
-SYMBOL = "FX:EURUSD"  # Символ TradingView для EUR/USD OTC
-INTERVAL = "1"  # 1-минутный таймфрейм
+INTERVAL = "1min"
+LIMIT = 100
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
-prices = []  # Хранение последних цен закрытия (close)
 
+def get_symbol():
+    # На выходных — OTC, в будни — обычный EUR/USD
+    today = datetime.now(timezone.utc).weekday()
+    if today >= 5:
+        return "EURUSD.OTC"
+    else:
+        return "EUR/USD"
 
-def calculate_sma(prices, period=10):
+def get_price_data():
+    symbol = get_symbol()
+    url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={INTERVAL}&apikey={API_KEY}&outputsize={LIMIT}"
+    response = requests.get(url)
+    data = response.json()
+
+    if "values" not in data:
+        print(f"[{datetime.now(timezone.utc)}] Ошибка получения данных:", data)
+        return []
+
+    closes = [float(x["close"]) for x in reversed(data["values"])]
+    return closes
+
+def SMA(prices, period=10):
     if len(prices) < period:
         return None
-    return np.mean(prices[-period:])
+    return sum(prices[-period:]) / period
 
-
-def calculate_rsi(prices, period=14):
+def RSI(prices, period=14):
     if len(prices) < period + 1:
         return None
     deltas = np.diff(prices)
@@ -32,6 +48,7 @@ def calculate_rsi(prices, period=14):
     down = -seed[seed < 0].sum() / period
     rs = up / down if down != 0 else 0
     rsi = 100. - (100. / (1. + rs))
+
     for delta in deltas[period:]:
         upval = max(delta, 0)
         downval = -min(delta, 0)
@@ -39,99 +56,107 @@ def calculate_rsi(prices, period=14):
         down = (down * (period - 1) + downval) / period
         rs = up / down if down != 0 else 0
         rsi = 100. - (100. / (1. + rs))
+
     return round(rsi, 2)
 
+def BollingerBands(prices, period=20, std_dev=2):
+    if len(prices) < period:
+        return None, None, None
+    sma = SMA(prices, period)
+    std = np.std(prices[-period:])
+    upper = sma + std_dev * std
+    lower = sma - std_dev * std
+    return lower, sma, upper
 
-def generate_signal(prices):
-    if len(prices) < 15:
+def MACD(prices, fast=12, slow=26, signal=9):
+    if len(prices) < slow + signal:
+        return None, None, None
+    ema_fast = EMA(prices, fast)
+    ema_slow = EMA(prices, slow)
+    if ema_fast is None or ema_slow is None:
+        return None, None, None
+    macd_line = np.array(ema_fast) - np.array(ema_slow)
+    signal_line = EMA(macd_line.tolist(), signal)
+    histogram = macd_line[-1] - signal_line[-1] if signal_line else None
+    return macd_line[-1], signal_line[-1], histogram
+
+def EMA(prices, period):
+    if len(prices) < period:
         return None
+    prices = np.array(prices)
+    weights = np.exp(np.linspace(-1., 0., period))
+    weights /= weights.sum()
+    a = np.convolve(prices, weights, mode='valid')
+    return a.tolist()
+
+def get_signal(prices):
+    if len(prices) < 30:
+        return None
+
+    sma_10 = SMA(prices, 10)
+    rsi_14 = RSI(prices, 14)
+    bb_lower, bb_middle, bb_upper = BollingerBands(prices, 20, 2)
+    macd_line, signal_line, macd_hist = MACD(prices)
 
     price_now = prices[-1]
-    sma = calculate_sma(prices, 10)
-    rsi = calculate_rsi(prices, 14)
 
-    print(f"[{datetime.now(timezone.utc)}] Цена: {price_now:.5f}, SMA: {sma:.5f}, RSI: {rsi}")
+    # Логика сигналов — комбинированная:
+    # CALL — цена выше SMA, RSI < 30 (перепродан), цена около нижней полосы Боллинджера,
+    # и MACD пересекает сигнал снизу вверх
+    # PUT — цена ниже SMA, RSI > 70 (перекуплен), цена около верхней полосы Боллинджера,
+    # и MACD пересекает сигнал сверху вниз
 
-    if price_now > sma and rsi is not None and rsi < 30:
-        return "CALL", sma, rsi, price_now
-    elif price_now < sma and rsi is not None and rsi > 70:
-        return "PUT", sma, rsi, price_now
+    call_condition = (
+        price_now > sma_10 and
+        rsi_14 < 30 and
+        price_now < bb_lower * 1.01 and
+        macd_hist is not None and macd_hist > 0
+    )
+
+    put_condition = (
+        price_now < sma_10 and
+        rsi_14 > 70 and
+        price_now > bb_upper * 0.99 and
+        macd_hist is not None and macd_hist < 0
+    )
+
+    print(f"[{datetime.now(timezone.utc)}] price={price_now:.5f} SMA={sma_10:.5f} RSI={rsi_14} BB_lower={bb_lower:.5f} BB_upper={bb_upper:.5f} MACD_hist={macd_hist}")
+
+    if call_condition:
+        return "CALL", sma_10, rsi_14, price_now
+    elif put_condition:
+        return "PUT", sma_10, rsi_14, price_now
     else:
         return None
-
 
 def send_signal(direction, sma, rsi, price_now):
     time_now = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
     emoji = "🟢" if direction == "CALL" else "🔴"
-    message = f"""
-📊 Сигнал по {SYMBOL} (1m)
-🕒 Время: {time_now}
-{emoji} {direction}
+    symbol = get_symbol()
 
-Цена: {price_now:.5f}
-SMA(10): {sma:.5f}
-RSI(14): {rsi}
-
-⚠️ Это не инвестиционная рекомендация.
-"""
+    message = (
+        f"📊 Сигнал по {symbol} (1m)\n"
+        f"🕒 Время: {time_now}\n"
+        f"{emoji} {direction}\n\n"
+        f"Цена: {price_now:.5f}\n"
+        f"SMA(10): {sma:.5f}\n"
+        f"RSI(14): {rsi}\n\n"
+        "⚠️ Это не инвестиционная рекомендация."
+    )
     bot.send_message(USER_ID, message)
 
+print("Бот запущен...")
 
-async def tradingview_ws():
-    global prices
-    url = "wss://data.tradingview.com/socket.io/websocket"
-
-    async with websockets.connect(url) as ws:
-        # Инициализация сессии
-        await ws.send('~m~8~m~{"session_id":"","timestamp":0}')
-        await asyncio.sleep(1)
-
-        # Создаем сессию для запроса котировок
-        await ws.send(f'~m~{len(json.dumps({"m":"quote_create_session","p":["qs_1", SYMBOL]}))}~m~{json.dumps({"m":"quote_create_session","p":["qs_1", SYMBOL]})}')
-        await asyncio.sleep(1)
-
-        # Подписываемся на данные 1м таймфрейма
-        await ws.send(f'~m~{len(json.dumps({"m":"resolve_symbol","p":["qs_1", SYMBOL]}))}~m~{json.dumps({"m":"resolve_symbol","p":["qs_1", SYMBOL]})}')
-        await asyncio.sleep(1)
-
-        await ws.send(f'~m~{len(json.dumps({"m":"create_series","p":["qs_1", "s1", "1", "1"]}))}~m~{json.dumps({"m":"create_series","p":["qs_1", "s1", INTERVAL, "1"]})}')
-        await asyncio.sleep(1)
-
-        while True:
-            try:
-                msg = await ws.recv()
-                if msg.startswith("~m~"):
-                    msg_json = msg[msg.find("{"):]
-                    data = json.loads(msg_json)
-
-                    # Обрабатываем новые бары
-                    if data.get("m") == "timescale_update":
-                        bars = data.get("p", [])[1].get("bars", [])
-                        for bar in bars:
-                            close_price = bar["close"]
-                            if len(prices) == 0 or prices[-1] != close_price:
-                                prices.append(close_price)
-                                if len(prices) > 100:
-                                    prices.pop(0)
-                                signal = generate_signal(prices)
-                                if signal:
-                                    direction, sma, rsi, price_now = signal
-                                    send_signal(direction, sma, rsi, price_now)
-
-            except Exception as e:
-                print("Ошибка WebSocket:", e)
-                await asyncio.sleep(5)
-
-
-def start_telegram_polling():
-    bot.infinity_polling()
-
-
-if __name__ == "__main__":
-    print("Бот запущен...")
-
-    # Запускаем Telegram polling в отдельном потоке
-    threading.Thread(target=start_telegram_polling, daemon=True).start()
-
-    # Запускаем WebSocket клиент
-    asyncio.run(tradingview_ws())
+while True:
+    try:
+        prices = get_price_data()
+        signal = get_signal(prices)
+        if signal:
+            direction, sma, rsi, price_now = signal
+            send_signal(direction, sma, rsi, price_now)
+        else:
+            print(f"[{datetime.now(timezone.utc)}] Сигнал отсутствует")
+        time.sleep(60)
+    except Exception as e:
+        print("Ошибка:", e)
+        time.sleep(60)
