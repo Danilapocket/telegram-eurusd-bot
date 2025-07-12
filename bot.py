@@ -6,40 +6,38 @@ from datetime import datetime, timezone
 
 # --- Настройки ---
 API_KEY = "e5626f0337684bb6b292e632d804029e"  # Twelve Data API
-TELEGRAM_TOKEN = "7566716689:AAGqf-h68P2icgJ0T4IySEhwnEvqtO81Xew"
-USER_ID = 1671720900
+TELEGRAM_TOKEN = "7566716689:AAGqf-h68P2icgJ0T4IySEhwnEvqtO81Xew"  # Твой токен Telegram
+USER_ID = 1671720900  # Твой Telegram ID
 INTERVAL = "1min"
 LIMIT = 100
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
+
 def get_symbol_for_today():
     today = datetime.now(timezone.utc).weekday()
-    if today >= 5:  # Сб, Вс — выходные
-        symbol = "EURUSD.OTC"
+    # В выходные используем OTC, в будни — стандартный символ
+    if today >= 5:
+        return "EURUSD.OTC"
     else:
-        symbol = "EURUSD"  # Changed to EURUSD to avoid issues with slash in API
-    print(f"[{datetime.now(timezone.utc)}] Символ для запроса: {symbol}")
-    return symbol
+        return "EUR/USD"
+
 
 def get_price_data():
     symbol = get_symbol_for_today()
-    print(f"[{datetime.now(timezone.utc)}] Запрос данных для символа {symbol} с Twelve Data")
+    print(f"[{datetime.now(timezone.utc)}] Запрос данных для символа {symbol}")
     url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={INTERVAL}&apikey={API_KEY}&outputsize={LIMIT}"
-    try:
-        response = requests.get(url, timeout=10)
-        data = response.json()
-    except Exception as e:
-        print(f"[{datetime.now(timezone.utc)}] Ошибка запроса данных: {e}")
-        return []
+    response = requests.get(url)
+    data = response.json()
 
     if "values" not in data:
-        print(f"[{datetime.now(timezone.utc)}] Ошибка получения данных: {data}")
+        print("Ошибка получения данных:", data)
         return []
 
     closes = [float(x["close"]) for x in reversed(data["values"])]
     print(f"[{datetime.now(timezone.utc)}] Получено {len(closes)} закрытий")
     return closes
+
 
 def calculate_rsi(prices, period=14):
     deltas = np.diff(prices)
@@ -59,9 +57,9 @@ def calculate_rsi(prices, period=14):
 
     return round(rsi, 2)
 
+
 def get_signal(prices):
     if len(prices) < 15:
-        print(f"[{datetime.now(timezone.utc)}] Недостаточно данных для сигнала")
         return None
 
     sma = sum(prices[-10:]) / 10
@@ -75,7 +73,9 @@ def get_signal(prices):
     elif price_now < sma and rsi > 70:
         return "PUT", sma, rsi, price_now
     else:
+        print(f"[{datetime.now(timezone.utc)}] Сигнал отсутствует")
         return None
+
 
 def send_signal(direction, sma, rsi, price_now):
     time_now = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
@@ -92,29 +92,20 @@ RSI(14): {rsi}
 
 ⚠️ Это не инвестиционная рекомендация.
 """
-    try:
-        bot.send_message(USER_ID, message)
-        print(f"[{datetime.now(timezone.utc)}] Отправлено сообщение с сигналом: {direction}")
-    except Exception as e:
-        print(f"[{datetime.now(timezone.utc)}] Ошибка отправки сообщения: {e}")
+    bot.send_message(USER_ID, message)
+    print(f"[{datetime.now(timezone.utc)}] Отправлено сообщение в Telegram")
 
+
+# --- Основной цикл ---
 print("Бот запущен...")
-
 while True:
-    print(f"[{datetime.now(timezone.utc)}] Начинаю итерацию цикла")
     try:
         prices = get_price_data()
-        if not prices:
-            print(f"[{datetime.now(timezone.utc)}] Нет данных цен, жду...")
-        else:
-            result = get_signal(prices)
-            if result:
-                direction, sma, rsi, price_now = result
-                print(f"[{datetime.now(timezone.utc)}] Сигнал: {direction}")
-                send_signal(direction, sma, rsi, price_now)
-            else:
-                print(f"[{datetime.now(timezone.utc)}] Сигнал отсутствует")
-        time.sleep(60)
+        result = get_signal(prices)
+        if result:
+            direction, sma, rsi, price_now = result
+            send_signal(direction, sma, rsi, price_now)
+        time.sleep(60)  # Ждём 1 минуту
     except Exception as e:
-        print(f"[{datetime.now(timezone.utc)}] Ошибка в цикле: {e}")
+        print("Ошибка:", e)
         time.sleep(60)
