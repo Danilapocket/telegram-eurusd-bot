@@ -4,6 +4,8 @@ import telebot
 import numpy as np
 from datetime import datetime, timezone
 
+print("Старт бота")  # Проверка запуска
+
 API_KEY = "e5626f0337684bb6b292e632d804029e"
 TELEGRAM_TOKEN = "7566716689:AAGqf-h68P2icgJ0T4IySEhwnEvqtO81Xew"
 USER_ID = 1671720900
@@ -63,7 +65,6 @@ def get_signal(prices):
 
     print(f"[{datetime.now(timezone.utc)}] Цена: {price_now:.5f}, SMA: {sma:.5f}, RSI: {rsi}")
 
-    # Мягкие условия, чтобы чаще приходил сигнал:
     if price_now > sma and rsi < 50:
         print("Генерируем сигнал CALL")
         return "CALL", sma, rsi, price_now
@@ -96,8 +97,10 @@ RSI(14): {rsi}
         print("Ошибка при отправке Telegram-сообщения:", e)
 
 print("Бот запущен...")
+
 while True:
     try:
+        print("Цикл итерация")
         prices = get_price_data()
         result = get_signal(prices)
         if result:
@@ -105,7 +108,7 @@ while True:
             send_signal(direction, sma, rsi, price_now)
         else:
             print("Сигнал не получен, ждём следующей итерации.")
-        time.sleep(60)
+        time.sleep(10)  # 10 секунд для быстрого теста
     except Exception as e:
         print("Ошибка в основном цикле:", e)
-        time.sleep(60)
+        time.sleep(10)
