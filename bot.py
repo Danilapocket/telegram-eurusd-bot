@@ -131,4 +131,5 @@ def main_loop():
 if __name__ == '__main__':
     import threading
     threading.Thread(target=main_loop).start()
+    bot.remove_webhook()
     bot.polling(none_stop=True)
