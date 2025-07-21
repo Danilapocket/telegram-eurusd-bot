@@ -1,4 +1,3 @@
-requests
+Flask
 pyTelegramBotAPI
-numpy
-websockets
+requests
