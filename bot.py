@@ -3,12 +3,14 @@ import requests
 import telebot
 import logging
 from datetime import datetime, timedelta
+import threading
 
 # Токены
 TWELVEDATA_API_KEY = 'e5626f0337684bb6b292e632d804029e'
 TELEGRAM_BOT_TOKEN = '7566716689:AAGqf-h68P2icgJ0T4IySEhwnEvqtO81Xew'
 TELEGRAM_CHAT_ID = 1671720900
 
+# Telegram-бот
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 
 # Логирование
@@ -42,7 +44,7 @@ def get_candles(symbol='EUR/USD', interval='1min', outputsize=3):
         logging.error(f"Ошибка при запросе котировок: {e}")
         return None
 
-# Генерация сигнала
+# Стратегия
 def generate_signal(candles):
     if not candles or len(candles) < 3:
         return None
@@ -61,26 +63,29 @@ def generate_signal(candles):
     else:
         return None
 
-# Отправка сигнала
+# Отправка сигнала в Telegram
 def send_signal(signal):
     global last_signal
     if signal == last_signal:
-        logging.info("Повторный сигнал — пропуск.")
+        logging.info("Повторный сигнал — не отправляем.")
         return
     last_signal = signal
     stats[signal] += 1
     stats['total'] += 1
 
-    now = datetime.utcnow() + timedelta(hours=3)  # UTC+3
+    # Текущее время в UTC+3
+    local_time = datetime.utcnow() + timedelta(hours=3)
+    formatted_time = local_time.strftime('%H:%M:%S')
+
     text = (
         f"📉 Сигнал по EUR/USD: {signal}\n"
-        f"🕐 Время: {now.strftime('%H:%M:%S')} (UTC+3)\n"
-        f"⏱ Открой сделку на 1 минуту"
+        f"🕐 Время: {formatted_time} (UTC+3)\n"
+        f"📈 Экспирация: 1 минута"
     )
     bot.send_message(TELEGRAM_CHAT_ID, text)
     logging.info(f"Отправлен сигнал: {signal}")
 
-# Обработка команд
+# Telegram-команды
 @bot.message_handler(commands=['start'])
 def handle_start(message):
     status['active'] = True
@@ -111,34 +116,36 @@ def main_loop():
             time.sleep(5)
             continue
 
-        now = datetime.utcnow()
-        seconds = now.second
-
-        # Ждём пока не станет 39–45 сек, чтобы прислать сигнал заранее (за 15–20 сек)
-        if seconds < 39 or seconds > 45:
-            time.sleep(1)
+        now = datetime.utcnow() + timedelta(hours=3)
+        if not (8 <= now.hour < 24):
+            logging.info("Вне торгового времени (08:00–00:00 UTC+3).")
+            time.sleep(60)
             continue
 
         candles = get_candles()
         if candles == 'limit_exceeded':
-            logging.warning("Превышен лимит API. Ждём час.")
+            logging.warning("Превышен лимит API. Ждём 1 час.")
             time.sleep(3600)
             continue
         if not candles:
-            logging.info("Нет данных с API.")
-            time.sleep(20)
+            logging.info("Данных нет или рынок закрыт.")
+            time.sleep(60)
             continue
 
         signal = generate_signal(candles)
         if signal:
+            # Ждём, чтобы отправить за 15–20 секунд до следующей свечи
+            now = datetime.utcnow()
+            seconds = now.second
+            delay = 60 - seconds - 15
+            if delay > 0:
+                time.sleep(delay)
             send_signal(signal)
         else:
-            logging.info("Нет сигнала.")
-
-        time.sleep(20)
+            logging.info("Сигнал не сгенерирован.")
+            time.sleep(60)
 
 # Запуск
 if __name__ == '__main__':
-    import threading
     threading.Thread(target=main_loop).start()
     bot.polling(none_stop=True)
