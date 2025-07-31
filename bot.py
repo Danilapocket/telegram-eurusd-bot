@@ -35,7 +35,7 @@ def get_candles(symbol='EUR/USD', interval='1min', outputsize=3):
         data = response.json()
         if 'status' in data and data['status'] == 'error':
             logging.error(f"Ошибка API: {data}")
-            if data['code'] == 429:
+            if data.get('code') == 429:
                 return 'limit_exceeded'
             return None
         return data.get('values')
@@ -43,11 +43,10 @@ def get_candles(symbol='EUR/USD', interval='1min', outputsize=3):
         logging.error(f"Ошибка при запросе котировок: {e}")
         return None
 
-# Более чувствительная стратегия
+# Стратегия
 def generate_signal(candles):
     if not candles or len(candles) < 3:
         return None
-
     close_0 = float(candles[0]['close'])
     close_1 = float(candles[1]['close'])
     close_2 = float(candles[2]['close'])
@@ -62,34 +61,25 @@ def generate_signal(candles):
     else:
         return None
 
-# Проверка времени по UTC+3
-def is_active_hours():
-    utc_plus_3 = datetime.utcnow() + timedelta(hours=3)
-    current_hour = utc_plus_3.hour
-    return 8 <= current_hour < 24
-
-# Отправка сигнала в Telegram
+# Отправка сигнала
 def send_signal(signal):
     global last_signal
     if signal == last_signal:
-        logging.info("Новый сигнал не сгенерирован или повтор предыдущего.")
         return
     last_signal = signal
     stats[signal] += 1
     stats['total'] += 1
 
-    utc_plus_3 = datetime.utcnow() + timedelta(hours=3)
-    local_time = utc_plus_3.strftime('%H:%M:%S')
-
-    color = "🟢" if signal == "CALL" else "🔴"
+    now_utc3 = datetime.utcnow() + timedelta(hours=3)
+    emoji = '🟢' if signal == 'CALL' else '🔴'
     text = (
-        f"{color} Сигнал по EUR/USD: {signal}\n"
-        f"🕐 Время: {local_time} UTC+3"
+        f"{emoji} Сигнал по EUR/USD: <b><u>{signal}</u></b>\n"
+        f"🕐 Время: {now_utc3.strftime('%H:%M:%S')} UTC+3"
     )
-    bot.send_message(TELEGRAM_CHAT_ID, text)
+    bot.send_message(TELEGRAM_CHAT_ID, text, parse_mode='HTML')
     logging.info(f"Отправлен сигнал: {signal}")
 
-# Команды Telegram
+# Telegram-команды
 @bot.message_handler(commands=['start'])
 def handle_start(message):
     status['active'] = True
@@ -116,7 +106,12 @@ def handle_stats(message):
 def main_loop():
     logging.info("Бот запущен.")
     while True:
-        if not status['active'] or not is_active_hours():
+        now = datetime.utcnow() + timedelta(hours=3)
+        if not (8 <= now.hour < 24):
+            time.sleep(60)
+            continue
+
+        if not status['active']:
             time.sleep(5)
             continue
 
@@ -126,18 +121,14 @@ def main_loop():
             time.sleep(3600)
             continue
         if not candles:
-            logging.info("Данных нет или рынок закрыт.")
             time.sleep(60)
             continue
 
         signal = generate_signal(candles)
         if signal:
-            logging.info("Задержка перед отправкой 20 секунд…")
-            time.sleep(20)
+            time.sleep(20)  # задержка 20 секунд перед отправкой
             send_signal(signal)
-        else:
-            logging.info("Сигнал не сгенерирован.")
-        time.sleep(40)  # 60 - 20 секунд задержки
+        time.sleep(60)
 
 # Запуск
 if __name__ == '__main__':
