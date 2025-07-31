@@ -2,8 +2,7 @@ import time
 import requests
 import telebot
 import logging
-from datetime import datetime
-import pytz
+from datetime import datetime, timedelta
 
 # Токены
 TWELVEDATA_API_KEY = 'e5626f0337684bb6b292e632d804029e'
@@ -48,11 +47,14 @@ def get_candles(symbol='EUR/USD', interval='1min', outputsize=3):
 def generate_signal(candles):
     if not candles or len(candles) < 3:
         return None
+
     close_0 = float(candles[0]['close'])
     close_1 = float(candles[1]['close'])
     close_2 = float(candles[2]['close'])
+
     diff1 = close_0 - close_1
     diff2 = close_1 - close_2
+
     if diff1 > 0 and diff2 > 0:
         return 'CALL'
     elif diff1 < 0 and diff2 < 0:
@@ -60,29 +62,29 @@ def generate_signal(candles):
     else:
         return None
 
-# Проверка по времени UTC+3
-def is_working_hours():
-    tz = pytz.timezone('Europe/Moscow')
-    now = datetime.now(tz)
-    return 8 <= now.hour < 24
+# Проверка времени по UTC+3
+def is_active_hours():
+    utc_plus_3 = datetime.utcnow() + timedelta(hours=3)
+    current_hour = utc_plus_3.hour
+    return 8 <= current_hour < 24
 
-# Отправка сигнала
+# Отправка сигнала в Telegram
 def send_signal(signal):
     global last_signal
     if signal == last_signal:
-        logging.info("Повтор предыдущего сигнала.")
+        logging.info("Новый сигнал не сгенерирован или повтор предыдущего.")
         return
     last_signal = signal
     stats[signal] += 1
     stats['total'] += 1
 
-    tz = pytz.timezone('Europe/Moscow')
-    now = datetime.now(tz).strftime('%H:%M:%S (UTC+3)')
+    utc_plus_3 = datetime.utcnow() + timedelta(hours=3)
+    local_time = utc_plus_3.strftime('%H:%M:%S')
 
-    emoji = '🟢' if signal == 'CALL' else '🔴'
+    color = "🟢" if signal == "CALL" else "🔴"
     text = (
-        f"{emoji} Сигнал по EUR/USD: {signal}\n"
-        f"🕐 Время: {now}"
+        f"{color} Сигнал по EUR/USD: {signal}\n"
+        f"🕐 Время: {local_time} UTC+3"
     )
     bot.send_message(TELEGRAM_CHAT_ID, text)
     logging.info(f"Отправлен сигнал: {signal}")
@@ -114,8 +116,8 @@ def handle_stats(message):
 def main_loop():
     logging.info("Бот запущен.")
     while True:
-        if not status['active'] or not is_working_hours():
-            time.sleep(10)
+        if not status['active'] or not is_active_hours():
+            time.sleep(5)
             continue
 
         candles = get_candles()
@@ -124,16 +126,18 @@ def main_loop():
             time.sleep(3600)
             continue
         if not candles:
-            logging.info("Нет данных.")
+            logging.info("Данных нет или рынок закрыт.")
             time.sleep(60)
             continue
 
         signal = generate_signal(candles)
         if signal:
+            logging.info("Задержка перед отправкой 20 секунд…")
+            time.sleep(20)
             send_signal(signal)
         else:
             logging.info("Сигнал не сгенерирован.")
-        time.sleep(45)  # задержка 15 сек до открытия свечи
+        time.sleep(40)  # 60 - 20 секунд задержки
 
 # Запуск
 if __name__ == '__main__':
