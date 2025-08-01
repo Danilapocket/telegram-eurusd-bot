@@ -3,6 +3,7 @@ import requests
 import telebot
 import logging
 from datetime import datetime, timedelta
+import pytz
 
 # Токены
 TWELVEDATA_API_KEY = 'e5626f0337684bb6b292e632d804029e'
@@ -10,135 +11,115 @@ TELEGRAM_BOT_TOKEN = '7566716689:AAGqf-h68P2icgJ0T4IySEhwnEvqtO81Xew'
 TELEGRAM_CHAT_ID = 1671720900
 
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
-
-# Логирование
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(message)s')
 
-# Состояние
-status = {'active': True}
+signals_enabled = True
 stats = {'CALL': 0, 'PUT': 0, 'total': 0}
 last_signal = None
 last_candle_time = None
 
-def get_candles(symbol='EUR/USD', interval='1min', outputsize=3):
-    url = 'https://api.twelvedata.com/time_series'
-    params = {
-        'symbol': symbol,
-        'interval': interval,
-        'apikey': TWELVEDATA_API_KEY,
-        'format': 'JSON',
-        'outputsize': outputsize
-    }
+moscow_tz = pytz.timezone("Europe/Moscow")
+
+def in_working_hours():
+    now = datetime.now(moscow_tz).hour
+    return 8 <= now < 24
+
+def fetch_candles():
     try:
-        response = requests.get(url, params=params)
-        data = response.json()
-        if 'status' in data and data['status'] == 'error':
-            logging.error(f"Ошибка API: {data}")
-            if data['code'] == 429:
-                return 'limit_exceeded'
+        resp = requests.get('https://api.twelvedata.com/time_series', params={
+            'symbol': 'EUR/USD',
+            'interval': '1min',
+            'apikey': TWELVEDATA_API_KEY,
+            'format': 'JSON',
+            'outputsize': 3
+        }, timeout=10)
+        data = resp.json()
+        if data.get('status') == 'error':
+            if data.get('code') == 429:
+                return 'limit'
             return None
         return data.get('values')
     except Exception as e:
-        logging.error(f"Ошибка при запросе котировок: {e}")
+        logging.error("Error fetching candles: %s", e)
         return None
 
 def generate_signal(candles):
     if not candles or len(candles) < 3:
         return None
-
-    close_0 = float(candles[0]['close'])
-    close_1 = float(candles[1]['close'])
-    close_2 = float(candles[2]['close'])
-
-    diff1 = close_0 - close_1
-    diff2 = close_1 - close_2
-
+    diff1 = float(candles[0]['close']) - float(candles[1]['close'])
+    diff2 = float(candles[1]['close']) - float(candles[2]['close'])
     if diff1 > 0 and diff2 > 0:
         return 'CALL'
-    elif diff1 < 0 and diff2 < 0:
+    if diff1 < 0 and diff2 < 0:
         return 'PUT'
-    else:
-        return None
+    return None
 
-def send_signal(signal):
+def send_signal(sig):
     global last_signal
-    if signal == last_signal:
+    if sig == last_signal:
         return
-    last_signal = signal
-    stats[signal] += 1
+    last_signal = sig
+    stats[sig] += 1
     stats['total'] += 1
+    now = datetime.now(moscow_tz).strftime('%H:%M:%S')
+    emoji = "🟢" if sig == 'CALL' else "🔴"
+    text = (f"{emoji} Сигнал по EUR/USD: <b>{sig}</b>\n"
+            f"🕒 Время: {now} UTC+3")
+    bot.send_message(TELEGRAM_CHAT_ID, text, parse_mode='HTML')
+    logging.info("Sent %s at %s", sig, now)
 
-    color = '🟩' if signal == 'CALL' else '🟥'
-    now = datetime.utcnow() + timedelta(hours=3)
-    time_str = now.strftime('%H:%M:%S')
-
-    text = (
-        f"{color} Сигнал по EUR/USD: {signal}\n"
-        f"🕐 Время: {time_str} UTC+3"
-    )
-    bot.send_message(TELEGRAM_CHAT_ID, text)
-    logging.info(f"Отправлен сигнал: {signal}")
-
-# Команды Telegram
 @bot.message_handler(commands=['start'])
-def handle_start(message):
-    status['active'] = True
-    bot.send_message(message.chat.id, "🟢 Сигналы включены")
+def cmd_start(msg):
+    global signals_enabled
+    signals_enabled = True
+    bot.send_message(msg.chat.id, "🟢 Сигналы включены")
 
 @bot.message_handler(commands=['stop'])
-def handle_stop(message):
-    status['active'] = False
-    bot.send_message(message.chat.id, "🔴 Сигналы отключены")
+def cmd_stop(msg):
+    global signals_enabled
+    signals_enabled = False
+    bot.send_message(msg.chat.id, "🔴 Сигналы отключены")
 
 @bot.message_handler(commands=['status'])
-def handle_status(message):
-    state = "включены" if status['active'] else "отключены"
-    bot.send_message(message.chat.id, f"⚙ Статус: сигналы {state}")
+def cmd_status(msg):
+    bot.send_message(msg.chat.id,
+                     "⚙️ Сигналы " + ("включены" if signals_enabled else "отключены"))
 
 @bot.message_handler(commands=['stats'])
-def handle_stats(message):
-    bot.send_message(
-        message.chat.id,
-        f"📊 Статистика:\nCALL: {stats['CALL']}\nPUT: {stats['PUT']}\nВсего: {stats['total']}"
-    )
+def cmd_stats(msg):
+    bot.send_message(msg.chat.id,
+                     f"📊 СТАТИСТИКА\nCALL: {stats['CALL']}\nPUT: {stats['PUT']}\nВсего: {stats['total']}")
 
-# Основной цикл
-def main_loop():
+def loop():
     global last_candle_time
-    logging.info("Бот запущен.")
+    logging.info("Signal loop started")
     while True:
-        now = datetime.utcnow() + timedelta(hours=3)
-        if not (8 <= now.hour < 24):
-            logging.info("Сейчас не рабочее время. Ждём...")
-            time.sleep(60)
-            continue
-
-        if not status['active']:
+        if not signals_enabled or not in_working_hours():
             time.sleep(5)
             continue
 
-        candles = get_candles()
-        if candles == 'limit_exceeded':
-            logging.warning("Превышен лимит API. Ждём 1 час.")
+        candles = fetch_candles()
+        if candles == 'limit':
+            logging.warning("API limit reached, pausing 1h")
             time.sleep(3600)
             continue
         if not candles:
             time.sleep(10)
             continue
 
-        candle_time = candles[0]['datetime']
-        if candle_time == last_candle_time:
-            time.sleep(10)
+        ct = candles[0]['datetime']
+        if ct == last_candle_time:
+            time.sleep(5)
             continue
-
-        last_candle_time = candle_time
-        signal = generate_signal(candles)
-        if signal:
-            send_signal(signal)
-
-        time.sleep(10)
+        last_candle_time = ct
+        sig = generate_signal(candles)
+        if sig:
+            # отправляем с небольшой задержкой
+            time.sleep(5)
+            send_signal(sig)
+        time.sleep(5)
 
 if __name__ == '__main__':
     import threading
-    threading.Thread(target=main_loop).start()
+    threading.Thread(target=loop, daemon=True).start()
     bot.polling(none_stop=True)
